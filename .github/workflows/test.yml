@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux: bash + OpenSSL 3 + pwsh. macOS: bash 3.2 + LibreSSL (and Homebrew OpenSSL 3) +
+        # pwsh. Windows: Windows PowerShell 5.1 + pwsh (report.sh is skipped there).
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Show the tools the scripts use
+        if: runner.os != 'Windows'
+        run: bash --version | head -1; openssl version; awk --version 2>/dev/null | head -1 || true; pwsh -v || true
+      - run: npm test

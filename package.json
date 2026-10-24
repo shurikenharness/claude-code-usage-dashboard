@@ -1,0 +1,20 @@
+{
+  "name": "claude-code-usage-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The open-source collector behind shuriken.sh's Claude Code usage dashboard: reads your local Claude Code transcripts, encrypts a numbers-only report on your computer, and uploads only the encrypted bytes.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "commands": "node scripts/commands.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shurikenharness/claude-code-usage-dashboard.git"
+  },
+  "homepage": "https://shuriken.sh/tools/claude-code-usage-dashboard"
+}

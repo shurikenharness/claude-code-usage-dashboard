@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag vX.Y.Z (the version in report.sh, report.ps1, package.json and CHANGELOG.md). The
+# tests run on Linux, macOS and Windows first; then the two scripts are published as release
+# assets with SHA256SUMS, a build attestation and release notes that carry the pinned commands.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Check the tag is the version in the files
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME but package.json says $version."
+            exit 1
+          fi
+          grep -qx "SCRIPT=sh-$version" report.sh
+          grep -qx "\$Version = 'ps1-$version'" report.ps1
+      - name: Checksums and release notes
+        run: |
+          sha256sum report.sh report.ps1 > SHA256SUMS
+          cat SHA256SUMS
+          node scripts/commands.mjs --notes > notes.md
+      - name: Attest the two scripts
+        # Pinned to a full commit SHA (test/repo.test.mjs refuses any action that is not): this job
+        # can write releases and mint attestations.
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            report.sh
+            report.ps1
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" report.sh report.ps1 SHA256SUMS \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
