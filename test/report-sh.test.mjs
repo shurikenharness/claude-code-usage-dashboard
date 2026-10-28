@@ -3,7 +3,7 @@
 // post to a stub server on 127.0.0.1 and open what it received with test/envelope.mjs.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -131,6 +131,72 @@ describe("report.sh --dry-run", { skip }, () => {
     assert.ok(dry.stderr.includes("Never sends: your prompts, Claude's replies, file paths or project names."));
     assert.ok(dry.stderr.includes("Nothing was sent."));
     assert.equal(stub.uploads.length, 0);
+  });
+});
+
+describe("report.sh reads with perl, and without it with grep and awk", { skip }, () => {
+  it("gives the same report both ways, byte for byte", async () => {
+    const withPerl = await run(["--dry-run", "--dir", CONFIG]);
+    const withAwk = await run(["--dry-run", "--dir", CONFIG], { SHURIKEN_REPORT_NO_PERL: "1" });
+    assert.equal(withPerl.code, 0, withPerl.stderr);
+    assert.equal(withAwk.code, 0, withAwk.stderr);
+    assert.equal(steady(withAwk.stdout), readFileSync(GOLDEN, "utf8"));
+    assert.equal(steady(withPerl.stdout), steady(withAwk.stdout));
+  });
+
+  it("gives the same report both ways for the last N days", async () => {
+    const days = String(Math.ceil((Date.now() / 1000 - EXPECTED.firstCall) / 86400) - 2);
+    const withPerl = await run(["--dry-run", "--days", days, "--dir", CONFIG]);
+    const withAwk = await run(["--dry-run", "--days", days, "--dir", CONFIG], { SHURIKEN_REPORT_NO_PERL: "1" });
+    assert.equal(withPerl.code, 0, withPerl.stderr);
+    assert.equal(steady(withPerl.stdout), steady(withAwk.stdout));
+    assert.ok(parseReport(withPerl.stdout).meta.first > EXPECTED.firstCall);
+  });
+
+  it("skips a file last written before the chosen days began, and still counts it", async () => {
+    const home = path.join(ROOT, "old-file");
+    const config = path.join(home, ".claude");
+    writeFixtureTranscripts(config);
+    // Session four's file holds the newest calls; dated a year back, --days must not read it.
+    const four = path.join(config, "projects", "-work-other", `${SID.four}.jsonl`);
+    const yearAgo = new Date(Date.now() - 365 * 86400 * 1000);
+    utimesSync(four, yearAgo, yearAgo);
+    const days = String(Math.ceil((Date.now() / 1000 - EXPECTED.firstCall) / 86400) + 1);
+    const result = await run(["--dry-run", "--days", days, "--dir", config]);
+    assert.equal(result.code, 0, result.stderr);
+    const report = parseReport(result.stdout);
+    assert.equal(report.meta.files, 6);
+    assert.equal(report.sessions.length, EXPECTED.sessions - 1);
+    assert.ok(report.meta.last < EXPECTED.lastCall);
+  });
+
+  it("reads a big folder in seconds", async () => {
+    // 40 MB of long assistant rows (thinking, tool inputs, file contents): the shape that made
+    // grep + awk take minutes on a heavy user's folder.
+    const dir = path.join(ROOT, "big", "projects", "-work-big");
+    mkdirSync(dir, { recursive: true });
+    const filler = "lorem ipsum dolor sit amet ".repeat(400);
+    for (let file = 0; file < 20; file++) {
+      const sid = `5${String(file).padStart(7, "0")}-1f2d-4c6b-9a8e-7d6c5b4a3f21`;
+      const rows = [];
+      for (let call = 0; call < 180; call++) {
+        rows.push(JSON.stringify({
+          cwd: "/work/big",
+          sessionId: sid,
+          message: { id: `msg_${file}_${call}`, model: "claude-opus-4-6", content: [{ type: "text", text: filler }], usage: { input_tokens: 1, output_tokens: 2 } },
+          requestId: `req_${file}_${call}`,
+          type: "assistant",
+          timestamp: "2026-09-01T10:00:00.000Z",
+        }));
+      }
+      writeFileSync(path.join(dir, `${sid}.jsonl`), `${rows.join("\n")}\n`);
+    }
+    const started = Date.now();
+    const result = await run(["--dry-run", "--dir", path.join(ROOT, "big")]);
+    const seconds = (Date.now() - started) / 1000;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(sum(parseReport(result.stdout).hours, "turns"), 20 * 180);
+    assert.ok(seconds < 5, `took ${seconds} s`);
   });
 });
 

@@ -14,12 +14,13 @@
 #
 # Options: --dir PATH (repeat it for more folders), --days N (only the last N days),
 #          --dry-run (print what would be sent and send nothing), --yes (don't ask), --help
-# Needs only what macOS and Linux ship: bash, find, grep, awk, sort, gzip, od, openssl, curl.
+# Needs only what macOS and Linux ship: bash, find, grep, awk, sort, gzip, od, openssl, curl, and
+# perl when it is there (much faster on a big folder; without it, grep and awk do the same pass).
 # What each part does: https://shuriken.sh/tools/claude-code-usage-dashboard/script
 set -euo pipefail
 umask 077
 
-SCRIPT=sh-1.0.0
+SCRIPT=sh-1.1.0
 ORIGIN="${SHURIKEN_REPORT_ORIGIN:-https://shuriken.sh}"  # tests point this at a local server
 TOOL=/tools/claude-code-usage-dashboard
 T="$(printf '\t')"
@@ -105,6 +106,96 @@ BEGIN { OFS = "\t"; n = split("low medium high xhigh max ultracode", w, " ")
   V[key] = a[1]; for (i = 2; i <= 12; i++) V[key] = V[key] OFS a[i] }
 END { for (k in V) print "T", V[k]; for (s in PJ) print "C", s, 0, PJ[s] }'
 
+# extract.pl: the same pass as extract.awk, line for line, in perl, which macOS and nearly every
+# Linux ship. It reads each file once, in order, and is about ten times faster than grep + awk on a
+# big folder. It also skips a file last written before --days began (its rows are all older), and
+# shows how far it has read when you watch it in a terminal. Without perl, the awk pass runs.
+EXTRACT_PL='
+use strict; no warnings; use bytes;
+my ($since, $tty) = @ARGV; @ARGV = ();
+my %EFF; my @w = qw(low medium high xhigh max ultracode); $EFF{$w[$_]} = $_ + 1 for 0 .. $#w;
+my %KIND = map { $_ => 1 } qw(five_hour seven_day seven_day_opus seven_day_sonnet seven_day_overage_included overage);
+sub val { my ($s, $key) = @_; my $i = index($s, $key); return "" if $i < 0;
+  my $v = substr($s, $i + length($key), 256) // ""; $i = index($v, q{"}); return $i >= 0 ? substr($v, 0, $i) : "" }
+sub num { my ($s, $key) = @_; my $i = index($s, $key); return 0 if $i < 0;
+  return ((substr($s, $i + length($key), 24) // "") =~ /^([0-9]+)/) ? $1 : 0 }
+sub last_ { my ($s, $key) = @_; my ($i, $r) = (0, undef); my $k = length($key);
+  while ((my $j = index($s, $key, $i)) >= 0) { $i = $j + $k; $r = $i }
+  return "" unless defined $r; my $v = substr($s, $r); $i = index($v, q{"}); return $i >= 0 ? substr($v, 0, $i) : "" }
+sub epoch { my ($t) = @_;
+  return -1 unless $t =~ /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})/;
+  my ($y, $m, $d, $hh, $mm, $ss) = ($1 + 0, $2 + 0, $3 + 0, $4, $5, $6);
+  my $z = substr($t, 19); $z =~ s/^\.[0-9]*//; my $o = 0;
+  if ($z =~ /^[+-][0-9][0-9]:?[0-9][0-9]\z/) { $z =~ tr/://d;
+    $o = (substr($z, 1, 2) * 3600 + substr($z, 3, 2) * 60) * (substr($z, 0, 1) eq "-" ? -1 : 1) }
+  elsif ($z ne "Z") { return -1 }
+  if ($m <= 2) { $y--; $m += 12 }
+  $d = 365 * $y + int($y / 4) - int($y / 100) + int($y / 400) + int((153 * ($m - 3) + 2) / 5) + $d - 719469;
+  return $d * 86400 + $hh * 3600 + $mm * 60 + $ss - $o }
+my (%SEEN, %PROJ, %PJ, %V); my ($np, $nr) = (0, 0);
+local $/ = "\0"; my @files = <STDIN>; chomp @files; $/ = "\n";
+my $total = 0; $total += -s $_ for @files; my ($done, $shown) = (0, -1);
+$| = 1; select STDERR; $| = 1; select STDOUT;
+FILE: for my $file (@files) {
+  my $size = -s $file; $done += $size;
+  # A transcript is only ever appended to: one last written a day before --days began holds none of its rows.
+  next FILE if $since > 0 && (stat(_))[9] < $since - 86400;
+  open(my $fh, "<", $file) or next FILE;
+  while (defined(my $line = <$fh>)) {
+    chomp $line; $line =~ s/\r\z//; $nr++;
+    # The lines grep picks in the awk pass: one of the six marks anywhere in the row. One scan
+    # notes every mark the row holds, so the checks below need not search the row again.
+    my %m; $m{$1} = 1 while $line =~ /("type":"assistant"|"subtype":"turn_duration"|command-name>\/effort<|"effortLevel"|"ultracode":true|"thinkingMetadata")/g;
+    next unless %m;
+    my $p = index($line, q{"message":\{}); my $pre = $p >= 0 ? substr($line, 0, $p) : $line;
+    my $sid = lc val($pre, q{"sessionId":"});
+    next if length($sid) != 36 || $sid !~ /^[0-9a-f-]+\z/;
+    my $lv = "";
+    # Each effort key below holds one of these four marks, so a row with none of them has no effort.
+    if (!($m{q{command-name>/effort<}} || $m{q{"ultracode":true}} || $m{q{"effortLevel"}} || $m{q{"thinkingMetadata"}})) {}
+    elsif (index($line, q{<command-name>/effort</command-name>}) >= 0) { $lv = val($line, q{<command-args>}); $lv =~ s/<.*//s }
+    elsif (index($line, q{"ultracode":true}) >= 0) { $lv = "ultracode" }
+    elsif (index($line, q{"effortLevel":"}) >= 0) { $lv = val($line, q{"effortLevel":"}) }
+    elsif ((my $tm = index($line, q{"thinkingMetadata":\{})) >= 0) { $lv = val(substr($line, $tm), q{"level":"}) }
+    $lv =~ tr/ \t//d; $lv = lc $lv;
+    if (exists $EFF{$lv}) { my $ts = epoch(last_($line, q{"timestamp":"})); print "P\t$sid\t$ts\t$EFF{$lv}\n" if $ts >= $since }
+    if ($m{q{"subtype":"turn_duration"}}) {
+      my $ts = epoch(last_($line, q{"timestamp":"})); my $u = last_($line, q{"uuid":"});
+      if ($ts >= $since && ($u eq "" || !exists $SEEN{$u})) { $SEEN{$u} = 1; print "D\t$sid\t$ts\t", num($line, q{"durationMs":}) + 0, "\n" }
+      next }
+    next if $p < 0;
+    # The usage object: the last "usage":{ in the row (it follows the message text).
+    my $q = rindex($line, q{"usage":\{}); next if $q < $p;
+    my $u = substr($line, $q + 8); my ($dep, $j) = (0, length($u));
+    while ($u =~ /([{}])/g) { if ($1 eq "{") { $dep++ } elsif (--$dep == 0) { $j = pos($u) - 1; last } }
+    my $tail = substr($u, $j + 1) // ""; $u = substr($u, 0, $j + 1);
+    my $ty = val($pre, q{"type":"}); $ty = last_($tail, q{"type":"}) if $ty eq ""; next if $ty ne "assistant";
+    my $ts = epoch(last_($tail, q{"timestamp":"})); next if $ts < $since;
+    if (index($tail, q{"isApiErrorMessage":true}) >= 0 && index($tail, q{"error":"rate_limit"}) >= 0) {
+      my $k = val($tail, q{"rateLimitType":"}); $k = "throttle" unless exists $KIND{$k};
+      my $id = last_($tail, q{"uuid":"}); if ($id eq "" || !exists $SEEN{$id}) { $SEEN{$id} = 1; print "L\t$sid\t$ts\t$k\n" }
+      next }
+    my $head = substr($line, $p, 600); my $ci = index($head, q{"content":}); $head = substr($head, 0, $ci) if $ci >= 0;
+    my $model = lc val($head, q{"model":"});
+    next if $model eq "<synthetic>";
+    $model = "other" if length($model) > 64 || $model !~ /^[a-z0-9][a-z0-9._-]*\z/;
+    my $cwd = val($pre, q{"cwd":"}); $PROJ{$cwd} = $np++ unless exists $PROJ{$cwd};
+    $PJ{$sid} = $PROJ{$cwd} unless exists $PJ{$sid};
+    my $cw = num($u, q{"cache_creation_input_tokens":}); my $c1 = num($u, q{"ephemeral_1h_input_tokens":}); $c1 = $cw if $c1 + 0 > $cw + 0;
+    my @v = ($sid, $ts, $model, num($u, q{"input_tokens":}), num($u, q{"output_tokens":}), num($u, q{"cache_read_input_tokens":}), $cw, $c1,
+      num($u, q{"web_search_requests":}), index($u, q{"speed":"fast"}) >= 0 ? 1 : 0, index($pre, q{"isSidechain":true}) >= 0 ? 1 : 0, index($u, q{"inference_geo":"us"}) >= 0 ? 1 : 0);
+    # One API request is written as several rows; the copy with the largest counts wins.
+    my $mid = val($head, q{"id":"}); my $rid = last_($tail, q{"requestId":"});
+    my $key = ($mid ne "" && $rid ne "") ? "$mid:$rid" : "#$nr";
+    my $a = $V{$key}; if (!$a) { $V{$key} = \@v; next }
+    if ($v[1] < $a->[1] || ($v[1] == $a->[1] && $v[0] lt $a->[0])) { @$a[0, 1] = @v[0, 1] }
+    for my $i (3 .. 11) { $a->[$i] = $v[$i] if $v[$i] + 0 > $a->[$i] + 0 } }
+  close $fh;
+  if ($tty && $total > 0) { my $pc = int(100 * $done / $total); if ($pc != $shown) { $shown = $pc; printf STDERR "\r  %3d%% read", $pc } } }
+print STDERR "\r            \r" if $tty && $total > 0;
+print "T\t", join("\t", @$_), "\n" for values %V;
+print "C\t$_\t0\t$PJ{$_}\n" for keys %PJ;'
+
 # reduce.awk: walks the rows of each session in time order and adds them up into the report.
 # First input: the model names, one per line, sorted; their line number is their index.
 REDUCE='
@@ -179,9 +270,15 @@ main() {
   # 1. Pick out only the lines that can hold usage, limits, turn times or effort, then extract.
   local now since=0
   now=$(date +%s); [ "$days" = 0 ] || since=$((now - days * 86400))
-  { LC_ALL=C find "$@" -type f -name '*.jsonl' -exec grep -h -F -e '"type":"assistant"' -e '"subtype":"turn_duration"' \
-      -e 'command-name>/effort<' -e '"effortLevel"' -e '"ultracode":true' -e '"thinkingMetadata"' {} + || true; } |
-    LC_ALL=C awk -v since="$since" "$EXTRACT" > "$TMP/rows"
+  if [ -z "${SHURIKEN_REPORT_NO_PERL:-}" ] && command -v perl >/dev/null 2>&1; then
+    local tty=0; [ -t 2 ] && tty=1
+    { LC_ALL=C find "$@" -type f -name '*.jsonl' -print0 || true; } |
+      LC_ALL=C perl -e "$EXTRACT_PL" "$since" "$tty" > "$TMP/rows" || die "Couldn't read the transcripts."
+  else
+    { LC_ALL=C find "$@" -type f -name '*.jsonl' -exec grep -h -F -e '"type":"assistant"' -e '"subtype":"turn_duration"' \
+        -e 'command-name>/effort<' -e '"effortLevel"' -e '"ultracode":true' -e '"thinkingMetadata"' {} + || true; } |
+      LC_ALL=C awk -v since="$since" "$EXTRACT" > "$TMP/rows"
+  fi
   LC_ALL=C awk -F "$T" '$1 == "T" { print $4 }' "$TMP/rows" | LC_ALL=C sort -u > "$TMP/models"
   [ -s "$TMP/models" ] || die "No Claude Code usage found in $files files. Use --dir to point at another folder."
 

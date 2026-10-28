@@ -1,5 +1,5 @@
 #v	1
-#meta	generated=0	tz=+0000	script=sh-1.0.0	files=6	first=1788256800	last=1788656400	truncated_sessions=0
+#meta	generated=0	tz=+0000	script=sh-1.1.0	files=6	first=1788256800	last=1788656400	truncated_sessions=0
 M	0	claude-haiku-4-5-20251001
 M	1	claude-opus-4-6
 M	2	claude-sonnet-4-5-20250929

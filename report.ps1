@@ -17,7 +17,7 @@ param([string[]]$Dir = @(), [int]$Days = 0, [switch]$DryRun, [switch]$Yes, [swit
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 
-$Version = 'ps1-1.0.0'
+$Version = 'ps1-1.1.0'
 $Origin = if ($env:SHURIKEN_REPORT_ORIGIN) { $env:SHURIKEN_REPORT_ORIGIN } else { 'https://shuriken.sh' }
 $Tool = '/tools/claude-code-usage-dashboard'
 $QT = [char]34; $O = [StringComparison]::Ordinal

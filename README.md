@@ -8,7 +8,9 @@ encrypted bytes, and prints a private link. The key is in that link, after the `
 never send to a server. So the server stores a file it can't open, and deletes it after 30 days.
 
 - `report.sh`: macOS and Linux. bash 3.2 or later, plus find, grep, awk, sort, gzip, od, openssl
-  and curl, which those systems ship with.
+  and curl, which those systems ship with. It reads with perl when it is there (macOS and nearly
+  every Linux have it), which takes seconds on a gigabyte of transcripts; without perl, grep and
+  awk do the same pass, slower.
 - `report.ps1`: Windows PowerShell 5.1 and PowerShell 7. Only what Windows has built in.
 
 Both print the same report, byte for byte, for the same transcripts. The tests check that on Linux,
@@ -16,19 +18,19 @@ macOS and Windows.
 
 ## Run it
 
-Each command downloads one file from this repository's v1.0.0 release, checks its SHA-256, and runs
+Each command downloads one file from this repository's v1.1.0 release, checks its SHA-256, and runs
 it only when the checksum matches.
 
 macOS and Linux:
 
 ```sh
-curl -fsSLo report.sh https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.0.0/report.sh && openssl dgst -sha256 -r report.sh | grep -q ^ca067721b9ec87078e6a72d1f9b6d3b351184fce9b958947d992acc633e9aa2c && bash report.sh
+curl -fsSLo report.sh https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.1.0/report.sh && openssl dgst -sha256 -r report.sh | grep -q ^7d8af3eccb2ef2259f0fb165c8f8ca2b55012b07ca632229e684d073e6368e74 && bash report.sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm "https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.0.0/report.ps1" -OutFile report.ps1; if ((Get-FileHash report.ps1).Hash -eq 'e1e6203b000a09a7111069783b17f0c2166ddf5a06bc9408dc2f5a0e8ffdc1a3') { & ([scriptblock]::Create((Get-Content report.ps1 -Raw))) } else { 'report.ps1 does not match its SHA-256, so it was not run.' }
+irm "https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.1.0/report.ps1" -OutFile report.ps1; if ((Get-FileHash report.ps1).Hash -eq 'c70e1c522ae51c9a5137269846759bb83121cc574295877b50aef00b286c2236') { & ([scriptblock]::Create((Get-Content report.ps1 -Raw))) } else { 'report.ps1 does not match its SHA-256, so it was not run.' }
 ```
 
 Newer releases print their own commands in the [release notes](https://github.com/shurikenharness/claude-code-usage-dashboard/releases).
@@ -36,16 +38,16 @@ Newer releases print their own commands in the [release notes](https://github.co
 ### Read it first
 
 ```sh
-curl -fsSLo report.sh https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.0.0/report.sh
-openssl dgst -sha256 -r report.sh      # ca067721b9ec87078e6a72d1f9b6d3b351184fce9b958947d992acc633e9aa2c
+curl -fsSLo report.sh https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.1.0/report.sh
+openssl dgst -sha256 -r report.sh      # 7d8af3eccb2ef2259f0fb165c8f8ca2b55012b07ca632229e684d073e6368e74
 less report.sh
 bash report.sh --dry-run               # prints the whole report it would send, sends nothing
 bash report.sh
 ```
 
 ```powershell
-irm "https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.0.0/report.ps1" -OutFile report.ps1
-Get-FileHash report.ps1                # e1e6203b000a09a7111069783b17f0c2166ddf5a06bc9408dc2f5a0e8ffdc1a3
+irm "https://github.com/shurikenharness/claude-code-usage-dashboard/releases/download/v1.1.0/report.ps1" -OutFile report.ps1
+Get-FileHash report.ps1                # c70e1c522ae51c9a5137269846759bb83121cc574295877b50aef00b286c2236
 notepad report.ps1
 & ([scriptblock]::Create((Get-Content report.ps1 -Raw))) -DryRun
 & ([scriptblock]::Create((Get-Content report.ps1 -Raw)))
